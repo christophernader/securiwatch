@@ -15,104 +15,81 @@ echo -e "${BLUE}      SecuriWatch Installer          ${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""
 
-# Check if docker is installed
-if ! command -v docker &> /dev/null; then
-    echo -e "${RED}Error: Docker is not installed. Please install Docker first.${NC}"
-    exit 1
-fi
-
-# Check if docker compose is installed (V2 preferred)
-if ! docker compose version &> /dev/null; then
-    echo -e "${YELLOW}Warning: Docker Compose V2 (plugin) not found. Trying V1...${NC}"
-    if ! command -v docker-compose &> /dev/null; then
-        echo -e "${RED}Error: Docker Compose (V1 or V2) is not installed. Please install Docker Compose first.${NC}"
-        exit 1
-    fi
-fi
-
-# Check if curl is installed
-if ! command -v curl &> /dev/null; then
-    echo -e "${RED}Error: curl is not installed. Please install curl first.${NC}"
-    exit 1
+# Check prerequisites
+if ! command -v docker &> /dev/null; then echo -e "${RED}Error: Docker not installed.${NC}"; exit 1; fi
+if ! command -v curl &> /dev/null; then echo -e "${RED}Error: curl not installed.${NC}"; exit 1; fi
+if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+    echo -e "${RED}Error: Docker Compose (V1 or V2) not installed.${NC}"; exit 1
 fi
 
 # Define installation directory explicitly
-# Use explicit path instead of $HOME to avoid potential env issues
 INSTALL_DIR="/home/chris/securiwatch" 
+TEMP_TAR="$INSTALL_DIR/source.tar.gz"
 
 echo "Current user: $(whoami)"
 echo "Target install directory: $INSTALL_DIR"
 
-# Check if installation directory exists
+# Handle existing directory
 if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}Directory '$INSTALL_DIR' already exists.${NC}"
-    ls -ld "$INSTALL_DIR" # DEBUG: Show ownership/permissions
-    echo -e "Would you like to:"
-    echo -e "  [1] Overwrite the existing directory (All data will be lost!)"
-    echo -e "  [2] Cancel installation"
-    read -p "Please choose (1-2): " choice
-
-    case $choice in
-        1)
-            echo -e "${YELLOW}Warning: Removing existing directory '$INSTALL_DIR'...${NC}"
-            # Try removing without sudo first, then with if needed
-            if ! rm -rf "$INSTALL_DIR"; then
-                echo -e "${YELLOW}Failed to remove as user, trying with sudo...${NC}"
-                if sudo rm -rf "$INSTALL_DIR"; then
-                    echo -e "${GREEN}Removed existing directory with sudo.${NC}"
-                else
-                    echo -e "${RED}Error: Failed to remove existing directory even with sudo. Please remove it manually and try again.${NC}"
-                    exit 1
-                fi
-            else
-                 echo -e "${GREEN}Removed existing directory as user.${NC}"
-            fi
-            ;;
-        *)
-            echo -e "${RED}Installation cancelled.${NC}"
-            exit 1
-            ;;
-    esac
+    ls -ld "$INSTALL_DIR"
+    read -p "Overwrite existing directory (y/N)? " -n 1 -r
+    echo # Move to a new line
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Installation cancelled.${NC}"
+        exit 1
+    fi
+    echo -e "${YELLOW}Removing existing directory '$INSTALL_DIR'...${NC}"
+    if ! rm -rf "$INSTALL_DIR"; then
+        if sudo rm -rf "$INSTALL_DIR"; then
+            echo -e "${GREEN}Removed existing directory with sudo.${NC}"
+        else
+            echo -e "${RED}Error: Failed to remove '$INSTALL_DIR'. Please remove it manually.${NC}"; exit 1
+        fi
+    else
+         echo -e "${GREEN}Removed existing directory as user.${NC}"
+    fi
 fi
 
+# Create directory
 echo -e "${GREEN}Creating directory: $INSTALL_DIR${NC}"
 mkdir -p "$INSTALL_DIR"
 if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to create directory '$INSTALL_DIR'. Check parent directory permissions.${NC}"
-    # DEBUG: Show permissions of parent directory
+    echo -e "${RED}Error: Failed to create directory '$INSTALL_DIR'. Check parent permissions.${NC}"
     ls -ld "$(dirname "$INSTALL_DIR")"
     exit 1
 fi
+ls -ld "$INSTALL_DIR"
 
-echo -e "${GREEN}DEBUG: Directory created. Checking ownership/permissions:${NC}"
-ls -ld "$INSTALL_DIR" # DEBUG: Show ownership/permissions after creation
+cd "$INSTALL_DIR" || exit 1
+echo -e "${GREEN}DEBUG: Changed directory to: $(pwd)${NC}"
 
-cd "$INSTALL_DIR" || exit 1 # Exit if cd fails
-echo -e "${GREEN}DEBUG: Changed directory to: $(pwd)${NC}" # DEBUG: Confirm current directory
+# Download archive first
+SOURCE_URL="https://github.com/christophernader/securiwatch/archive/refs/heads/main.tar.gz"
+echo -e "${GREEN}Downloading source archive from $SOURCE_URL...${NC}"
+curl -#L "$SOURCE_URL" -o "$TEMP_TAR"
 
-# DEBUG: Test write permissions
-echo -e "${GREEN}DEBUG: Testing write permissions in $(pwd)...${NC}"
-touch test_write_file
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Cannot write test file in '$INSTALL_DIR'. Check permissions.${NC}"
-    exit 1
-else
-    echo -e "${GREEN}DEBUG: Write test successful.${NC}"
-    rm test_write_file
-fi
-
-# Download and extract SecuriWatch
-echo -e "${GREEN}Downloading and extracting SecuriWatch...${NC}"
-# Using -v for verbose tar output
-curl -#L https://github.com/christophernader/securiwatch/archive/refs/heads/main.tar.gz | tar -xzvf - --strip-components 1
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to download and extract SecuriWatch.${NC}"
-    cd .. && rm -rf "$INSTALL_DIR" # Clean up failed install
+if [ $? -ne 0 ] || [ ! -f "$TEMP_TAR" ]; then
+    echo -e "${RED}Error: Failed to download source archive.${NC}"
+    cd .. && rm -rf "$INSTALL_DIR" # Clean up
     exit 1
 fi
+echo -e "${GREEN}Download complete. Archive saved to $TEMP_TAR${NC}"
 
-echo -e "${GREEN}Download complete!${NC}"
+# Extract the downloaded archive
+echo -e "${GREEN}Extracting archive...${NC}"
+tar -xzvf "$TEMP_TAR" --strip-components 1
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to extract source archive.${NC}"
+    # Don't delete the whole dir, just the failed tarball maybe?
+    rm -f "$TEMP_TAR"
+    exit 1
+fi
+
+# Clean up downloaded archive
+echo -e "${GREEN}Extraction complete. Removing temporary archive...${NC}"
+rm "$TEMP_TAR"
 
 # Make scripts executable
 chmod +x setup.sh generate-certs.sh scripts/healthcheck.sh update.sh install.sh
