@@ -39,9 +39,14 @@ fi
 # Define installation directory in user's home
 INSTALL_DIR="$HOME/securiwatch"
 
+echo "Current user: $(whoami)"
+echo "Home directory: $HOME"
+echo "Target install directory: $INSTALL_DIR"
+
 # Check if installation directory exists
 if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}Directory '$INSTALL_DIR' already exists.${NC}"
+    ls -ld "$INSTALL_DIR" # DEBUG: Show ownership/permissions
     echo -e "Would you like to:"
     echo -e "  [1] Overwrite the existing directory (All data will be lost!)"
     echo -e "  [2] Cancel installation"
@@ -50,7 +55,18 @@ if [ -d "$INSTALL_DIR" ]; then
     case $choice in
         1)
             echo -e "${YELLOW}Warning: Removing existing directory '$INSTALL_DIR'...${NC}"
-            rm -rf "$INSTALL_DIR"
+            # Try removing without sudo first, then with if needed
+            if ! rm -rf "$INSTALL_DIR"; then
+                echo -e "${YELLOW}Failed to remove as user, trying with sudo...${NC}"
+                if sudo rm -rf "$INSTALL_DIR"; then
+                    echo -e "${GREEN}Removed existing directory with sudo.${NC}"
+                else
+                    echo -e "${RED}Error: Failed to remove existing directory even with sudo. Please remove it manually and try again.${NC}"
+                    exit 1
+                fi
+            else
+                 echo -e "${GREEN}Removed existing directory as user.${NC}"
+            fi
             ;;
         *)
             echo -e "${RED}Installation cancelled.${NC}"
@@ -61,11 +77,32 @@ fi
 
 echo -e "${GREEN}Creating directory: $INSTALL_DIR${NC}"
 mkdir -p "$INSTALL_DIR"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to create directory '$INSTALL_DIR'. Check parent directory permissions.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}DEBUG: Directory created. Checking ownership/permissions:${NC}"
+ls -ld "$INSTALL_DIR" # DEBUG: Show ownership/permissions after creation
+
 cd "$INSTALL_DIR" || exit 1 # Exit if cd fails
+echo -e "${GREEN}DEBUG: Changed directory to: $(pwd)${NC}" # DEBUG: Confirm current directory
+
+# DEBUG: Test write permissions
+echo -e "${GREEN}DEBUG: Testing write permissions in $(pwd)...${NC}"
+touch test_write_file
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Cannot write test file in '$INSTALL_DIR'. Check permissions.${NC}"
+    exit 1
+else
+    echo -e "${GREEN}DEBUG: Write test successful.${NC}"
+    rm test_write_file
+fi
 
 # Download and extract SecuriWatch
-echo -e "${GREEN}Downloading SecuriWatch...${NC}"
-curl -#L https://github.com/christophernader/securiwatch/archive/refs/heads/main.tar.gz | tar -xzf - --strip-components 1
+echo -e "${GREEN}Downloading and extracting SecuriWatch...${NC}"
+# Using -v for verbose tar output
+curl -#L https://github.com/christophernader/securiwatch/archive/refs/heads/main.tar.gz | tar -xzvf - --strip-components 1
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to download and extract SecuriWatch.${NC}"
