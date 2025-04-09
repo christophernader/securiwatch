@@ -1,0 +1,29 @@
+email:
+  enabled: false
+  smtp_server: ""
+  smtp_port: 587
+  smtp_user: ""
+  smtp_password: ""
+  from_address: "alerter@securiwatch.local"
+  to_addresses: []
+  subject_template: "SecuriWatch Alert: {{ severity | upper }} - {{ event_type }}"
+  body_template: |
+    <h2>SecuriWatch Security Alert</h2>
+    <p><strong>Severity:</strong> {{ severity | upper }}</p>
+    <p><strong>Source:</strong> {{ source }}</p>
+    <p><strong>Timestamp:</strong> {{ timestamp }}</p>
+    <p><strong>Event Type:</strong> {{ event_type }}</p>
+    <p><strong>Message:</strong></p>
+    <pre>{{ message }}</pre>
+
+webhook:
+  enabled: false
+  urls: []
+  method: "POST"
+  headers:
+    Content-Type: "application/json"
+
+alert_rate_limit:
+  enabled: true
+  window_seconds: 300
+  max_similar_alerts: 3 

@@ -1,0 +1,187 @@
+version: '3.8'
+
+services:
+  # Elasticsearch for log storage and search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.16.2
+    container_name: elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=${ES_CLUSTER_NAME:-securiwatch-cluster}
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms${ES_HEAP_SIZE:-1g} -Xmx${ES_HEAP_SIZE:-1g}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - securiwatch-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Kibana for visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.16.2
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    volumes:
+      - ./config/kibana:/usr/share/kibana/config/dashboards
+    networks:
+      - securiwatch-network
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Logstash for log processing
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.16.2
+    container_name: logstash
+    environment:
+      - "LS_JAVA_OPTS=-Xms${LS_HEAP_SIZE:-512m} -Xmx${LS_HEAP_SIZE:-512m}"
+    volumes:
+      - ./config/logstash/pipeline:/usr/share/logstash/pipeline
+      - ./config/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+    ports:
+      - "5044:5044"  # Filebeat
+      - "5140:5140/udp"  # Syslog
+      - "5000:5000"  # TCP logs
+    networks:
+      - securiwatch-network
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9600"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Wazuh manager for security monitoring
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.3.8
+    container_name: wazuh-manager
+    ports:
+      - "1514:1514/udp"
+      - "1515:1515"
+      - "55000:55000"
+    volumes:
+      - wazuh-manager-config:/var/ossec/etc
+      - wazuh-manager-data:/var/ossec/data
+    networks:
+      - securiwatch-network
+    restart: unless-stopped
+
+  # Wazuh dashboard for monitoring
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.3.8
+    container_name: wazuh-dashboard
+    ports:
+      - "${WAZUH_PORT:-8080}:443"
+    environment:
+      - ELASTICSEARCH_URL=https://elasticsearch:9200
+      - WAZUH_API_URL=https://wazuh-manager:55000
+    networks:
+      - securiwatch-network
+    depends_on:
+      - elasticsearch
+      - wazuh-manager
+    restart: unless-stopped
+
+  # NGINX for secure access to dashboards
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./config/nginx/ssl:/etc/nginx/ssl
+      - ./config/nginx/.htpasswd:/etc/nginx/.htpasswd
+    networks:
+      - securiwatch-network
+    depends_on:
+      - wazuh-dashboard
+      - kibana
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Alert service for notifications
+  alerter:
+    build: ./alerter
+    container_name: alerter
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./alerter/config.yml:/app/config/config.yml
+    environment:
+      - SMTP_SERVER=${SMTP_SERVER:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - ALERT_EMAIL=${ALERT_EMAIL:-}
+      - WEBHOOK_URLS=${WEBHOOK_URLS:-}
+    networks:
+      - securiwatch-network
+    depends_on:
+      - elasticsearch
+      - logstash
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Filebeat to collect logs from host
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.16.2
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - filebeat-data:/usr/share/filebeat/data
+    networks:
+      - securiwatch-network
+    depends_on:
+      - elasticsearch
+      - logstash
+    restart: unless-stopped
+    command: filebeat -e -strict.perms=false
+
+volumes:
+  elasticsearch-data:
+  wazuh-manager-config:
+  wazuh-manager-data:
+  filebeat-data:
+
+networks:
+  securiwatch-network:
+    driver: bridge 

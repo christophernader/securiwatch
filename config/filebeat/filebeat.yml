@@ -1,0 +1,72 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/auth.log
+    - /var/log/syslog
+    - /var/log/secure
+  fields:
+    type: syslog
+  fields_under_root: true
+  scan_frequency: 10s
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+    - /var/log/apache2/access.log
+    - /var/log/apache2/error.log
+    - /var/log/httpd/access_log
+    - /var/log/httpd/error_log
+  fields:
+    type: webserver
+  fields_under_root: true
+  scan_frequency: 10s
+
+- type: container
+  enabled: true
+  paths:
+    - /var/lib/docker/containers/*/*.log
+  json.keys_under_root: true
+  json.message_key: log
+  json.add_error_key: true
+  processors:
+    - add_docker_metadata:
+        host: "unix:///var/run/docker.sock"
+    - add_host_metadata: {}
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+setup.dashboards.enabled: true
+setup.template.name: "filebeat"
+setup.template.pattern: "filebeat-*"
+setup.kibana:
+  host: "kibana:5601"
+
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+  - add_kubernetes_metadata: ~
+
+output.elasticsearch:
+  enabled: false
+  hosts: ["elasticsearch:9200"]
+  index: "filebeat-%{[agent.version]}-%{+yyyy.MM.dd}"
+  
+output.logstash:
+  enabled: true
+  hosts: ["logstash:5044"]
+  loadbalance: true
+  ssl.enabled: false
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644 
