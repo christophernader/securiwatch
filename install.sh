@@ -22,8 +22,8 @@ if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/
     echo -e "${RED}Error: Docker Compose (V1 or V2) not installed.${NC}"; exit 1
 fi
 
-# Define installation directory explicitly
-INSTALL_DIR="/home/chris/securiwatch" 
+# Define installation directory in user's home
+INSTALL_DIR="$HOME/securiwatch" 
 TEMP_TAR="$INSTALL_DIR/source.tar.gz"
 
 echo "Current user: $(whoami)"
