@@ -16,10 +16,8 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
-    # Expose port only if direct access is needed, otherwise remove for production
-    # ports:
-    #   - "9200:9200"
+      # Use bind mount to store data locally within ./data
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
     networks:
       - securiwatch-network
     restart: unless-stopped
@@ -32,7 +30,7 @@ services:
           cpus: '0.5'
           memory: 1g
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9200"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -44,15 +42,13 @@ services:
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    # Expose port only if direct access is needed, otherwise remove for production
-    # ports:
-    #   - "${KIBANA_PORT:-5601}:5601"
     volumes:
       - ./config/kibana:/usr/share/kibana/config/dashboards
     networks:
       - securiwatch-network
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -63,7 +59,7 @@ services:
           cpus: '0.25'
           memory: 512m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5601"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5601/app/kibana"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,16 +72,17 @@ services:
     environment:
       - "LS_JAVA_OPTS=-Xms${LS_HEAP_SIZE:-512m} -Xmx${LS_HEAP_SIZE:-512m}"
     volumes:
-      - ./config/logstash/pipeline:/usr/share/logstash/pipeline
-      - ./config/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./config/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./config/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
     ports:
-      - "5044:5044"  # Filebeat
-      - "5140:5140/udp"  # Syslog
-      - "5000:5000"  # TCP logs
+      - "5044:5044"      # Beats input
+      - "5140:5140/udp"  # Syslog input
+      - "5000:5000"      # TCP input (e.g., JSON over TCP)
     networks:
       - securiwatch-network
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -96,7 +93,7 @@ services:
           cpus: '0.25'
           memory: 512m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9600"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9600"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -107,12 +104,13 @@ services:
     image: wazuh/wazuh-manager:4.3.8
     container_name: wazuh-manager
     ports:
-      - "1514:1514/udp"
-      - "1515:1515"
-      - "55000:55000"
+      - "1514:1514/udp" # Agent Syslog
+      - "1515:1515"     # Agent Enrollment
+      - "55000:55000"   # Wazuh API
     volumes:
-      - wazuh-manager-config:/var/ossec/etc
-      - wazuh-manager-data:/var/ossec/data
+      # Use bind mounts
+      - ./data/wazuh-manager-config:/var/ossec/etc
+      - ./data/wazuh-manager-data:/var/ossec/data
     networks:
       - securiwatch-network
     restart: unless-stopped
@@ -124,22 +122,25 @@ services:
         reservations:
           cpus: '0.5'
           memory: 1g
+    # Wazuh manager image does not have a built-in healthcheck command easily usable
 
   # Wazuh dashboard for monitoring
   wazuh-dashboard:
     image: wazuh/wazuh-dashboard:4.3.8
     container_name: wazuh-dashboard
-    # Only NGINX needs to expose ports
-    # ports:
-    #   - "${WAZUH_PORT:-8080}:443"
     environment:
+      # Needs direct HTTPS comms with ES; requires trusting ES cert or disabling verification
+      # For simplicity with self-signed certs, often verification is disabled internally.
+      # Ensure proper certs and verification if ES is exposed or in strict security environments.
       - ELASTICSEARCH_URL=https://elasticsearch:9200
       - WAZUH_API_URL=https://wazuh-manager:55000
     networks:
       - securiwatch-network
     depends_on:
-      - elasticsearch
-      - wazuh-manager
+      elasticsearch:
+        condition: service_healthy
+      wazuh-manager:
+        condition: service_started # No healthcheck available
     restart: unless-stopped
     deploy:
       resources:
@@ -149,23 +150,25 @@ services:
         reservations:
           cpus: '0.25'
           memory: 512m
+    # Wazuh dashboard image doesn't have a simple healthcheck endpoint
 
   # NGINX for secure access to dashboards
   nginx:
     image: nginx:latest
     container_name: nginx
     ports:
-      - "80:80"
-      - "443:443"
+      # Changed host ports to avoid conflict with standard 80/443
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
     volumes:
-      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./config/nginx/ssl:/etc/nginx/ssl
-      - ./config/nginx/.htpasswd:/etc/nginx/.htpasswd
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/ssl:/etc/nginx/ssl:ro
+      - ./config/nginx/.htpasswd:/etc/nginx/.htpasswd:ro
     networks:
       - securiwatch-network
     depends_on:
       wazuh-dashboard:
-        condition: service_started
+        condition: service_started # No healthcheck available
       kibana:
         condition: service_healthy
     restart: unless-stopped
@@ -178,7 +181,8 @@ services:
           cpus: '0.1'
           memory: 128m
     healthcheck:
-      test: ["CMD", "nginx", "-t"]
+      # Test config and reachability via loopback on standard ports
+      test: ["CMD-SHELL", "nginx -t && curl -sf --resolve localhost:443:127.0.0.1 https://localhost/nginx_health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -187,11 +191,8 @@ services:
   alerter:
     build: ./alerter
     container_name: alerter
-    # Port doesn't need to be exposed externally
-    # ports:
-    #   - "8081:8080"
     volumes:
-      - ./alerter/config.yml:/app/config/config.yml
+      - ./alerter/config.yml:/app/config/config.yml:ro
     environment:
       - SMTP_SERVER=${SMTP_SERVER:-}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -214,7 +215,7 @@ services:
           cpus: '0.05'
           memory: 64m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -227,10 +228,12 @@ services:
     user: root
     volumes:
       - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # Mount host logs
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Needed for container metadata
-      - filebeat-data:/usr/share/filebeat/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Use bind mount for data
+      - ./data/filebeat:/usr/share/filebeat/data
     networks:
       - securiwatch-network
     depends_on:
@@ -246,12 +249,6 @@ services:
         reservations:
           cpus: '0.1'
           memory: 128m
-
-volumes:
-  elasticsearch-data:
-  wazuh-manager-config:
-  wazuh-manager-data:
-  filebeat-data:
 
 networks:
   securiwatch-network:

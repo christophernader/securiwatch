@@ -4,13 +4,13 @@ A containerized security monitoring solution that provides easy-to-read logs and
 
 ## Instant Installation
 
-Just copy and paste this command to install SecuriWatch:
+Installs to `$HOME/securiwatch` and uses port `8443` by default.
 
 ```bash
 curl -sL https://raw.githubusercontent.com/christophernader/securiwatch/main/install.sh | bash
 ```
 
-That's it! Access the dashboard at https://localhost
+That's it! Access the dashboard at https://localhost:8443
 
 **Default credentials:** `admin` / `securiwatch`
 
@@ -25,21 +25,16 @@ mkdir securiwatch && cd securiwatch && curl -sL https://github.com/christopherna
 
 ## Standard Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/christophernader/securiwatch.git
-cd securiwatch
-
-# Start the monitoring stack with default configuration
-./setup.sh
-
-# OR to just start the services:
-docker-compose up -d
-```
-
-Access the dashboard at https://localhost
-
-**Default credentials:** `admin` / `securiwatch`
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/christophernader/securiwatch.git
+   cd securiwatch
+   ```
+2. Run setup:
+   ```bash
+   ./setup.sh
+   ```
+3. Access the dashboard at https://localhost:8443
 
 ## Features
 
@@ -48,31 +43,37 @@ Access the dashboard at https://localhost
 - Alerting for suspicious activities
 - Support for various log sources
 - Easy deployment via Docker
+- Data stored locally in `./data` subdirectories (uses bind mounts)
 
 ## Configuration Options
 
 The default configuration works out of the box, but you can customize:
 
-1. **Environment Variables**: Edit `.env` file:
+1. **Ports & Resources**: Edit `.env` file:
    ```bash
-   cp .env.example .env
+   # If .env doesn't exist after setup
+   # cp .env.example .env 
    nano .env
    ```
+   - Change `HTTP_PORT`, `HTTPS_PORT`
+   - Adjust resource limits (`*_CPU_LIMIT`, `*_MEM_LIMIT`)
 
 2. **Log Sources**: See [Adding Log Sources](docs/adding-log-sources.md)
 
 3. **Alert Notifications**: Configure email or webhook alerts:
-   ```
+   ```bash
    # Edit alerter configuration
    nano alerter/config.yml
+   # Also uncomment and set SMTP/Webhook vars in .env
    ```
 
 ## System Requirements
 
-- Docker and Docker Compose 
+- Docker and Docker Compose (V1 or V2)
+- Linux Host (tested on Debian/Ubuntu)
 - 2+ CPU cores
 - 4GB+ RAM
-- 20GB+ storage space
+- 20GB+ storage space (available where you install SecuriWatch, e.g., `/home`)
 
 ## Server Deployment
 
@@ -83,7 +84,7 @@ For production deployment on a remote server, see [Server Deployment Guide](docs
 If you want to maintain your own version of SecuriWatch:
 
 ```bash
-# Create a new repository on GitHub/GitLab first, then:
+# Clone this repository
 git clone https://github.com/christophernader/securiwatch.git
 cd securiwatch
 
@@ -96,7 +97,7 @@ git add .
 git commit -m "Initial commit"
 
 # Add your remote repository
-git remote add origin https://github.com/yourusername/your-new-repo.git
+git remote add origin https://github.com/YOUR-USERNAME/your-new-repo.git
 git push -u origin main
 ```
 
@@ -105,6 +106,8 @@ git push -u origin main
 To update SecuriWatch to the latest version:
 
 ```bash
+# Ensure you are in the securiwatch directory
+cd ~/securiwatch
 ./update.sh
 ```
 

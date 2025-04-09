@@ -1,180 +1,143 @@
 # Deploying SecuriWatch on a Server
 
-This guide provides instructions for deploying SecuriWatch on a production server, with security best practices.
+This guide provides instructions for deploying SecuriWatch on a production server, emphasizing security and resource management.
 
 ## Prerequisites
 
-- A Linux server with at least 4GB RAM, 2 CPUs, and 50GB storage (recommended minimum, adjust based on load)
-- Docker and Docker Compose installed
-- Internet access to pull Docker images
-- SSH access to the server
+- A Linux server (e.g., Debian, Ubuntu) with root/sudo access.
+- Recommended Minimums: 2+ CPUs, 4GB+ RAM, 50GB+ Storage (on the target partition, e.g., `/home` or `/opt`).
+- Docker Engine installed: [Install Docker Engine](https://docs.docker.com/engine/install/)
+- Docker Compose V2 (Plugin) installed: `sudo apt install docker-compose-plugin`
+- `curl`, `git`, `openssl` installed: `sudo apt install curl git openssl`
 
-## Step 1: Prepare the Server
+## Step 1: Install SecuriWatch
 
-1. Update your server:
-   ```bash
-   sudo apt update && sudo apt upgrade -y
-   ```
-
-2. Install dependencies if not already installed:
-   ```bash
-   sudo apt install -y curl git openssl docker-compose-plugin
-   # Or install docker-compose manually if needed
-   ```
-
-3. Increase virtual memory for Elasticsearch:
-   ```bash
-   sudo sysctl -w vm.max_map_count=262144
-   echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
-   ```
-
-4. Configure firewall to allow only necessary ports:
-   ```bash
-   sudo ufw allow 22/tcp     # SSH
-   sudo ufw allow 80/tcp     # HTTP (redirects to HTTPS)
-   sudo ufw allow 443/tcp    # HTTPS (main dashboard)
-   sudo ufw enable
-   ```
-
-## Step 2: Install SecuriWatch
-
-Use the recommended installer script:
+Choose an installation directory with sufficient disk space (e.g., `/opt/securiwatch` or `$HOME/securiwatch`). The installer defaults to `$HOME/securiwatch`.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/christophernader/securiwatch/main/install.sh | sudo bash -s -- -d /opt/securiwatch
+# Install to $HOME/securiwatch
+curl -sL https://raw.githubusercontent.com/christophernader/securiwatch/main/install.sh | bash
+
+# OR Install to /opt/securiwatch (requires sudo for the curl | bash part)
+# curl -sL https://raw.githubusercontent.com/christophernader/securiwatch/main/install.sh | sudo bash -s -- -d /opt/securiwatch
 ```
 
-This will install SecuriWatch to `/opt/securiwatch`. Change the `-d` flag if you prefer a different directory.
+This script downloads SecuriWatch, sets permissions, and runs the initial setup (`./setup.sh`). Data volumes will be stored as bind mounts within the chosen installation directory (e.g., `$HOME/securiwatch/data`).
 
-## Step 3: Configure SecuriWatch for Production
+## Step 2: Configure SecuriWatch for Production
 
-Navigate to the installation directory (e.g., `/opt/securiwatch`):
+Navigate to the installation directory (e.g., `$HOME/securiwatch` or `/opt/securiwatch`):
 ```bash
-cd /opt/securiwatch
+cd $HOME/securiwatch  # Or /opt/securiwatch
 ```
 
-1. Create and customize the environment file:
+1. **Customize Environment (`.env`)**:
    ```bash
-   # .env might have been created by the installer
-   # If not, copy the example:
-   # sudo cp .env.example .env
-   sudo nano .env
+   # .env should exist after install.sh runs
+sudo nano .env
    ```
+   - **Ports**: Change `HTTP_PORT` (default 8080) and `HTTPS_PORT` (default 8443) if they conflict with other services.
+   - **Credentials**: Set a strong `WAZUH_API_PASSWORD`.
+   - **Resource Limits**: Uncomment and adjust `*_CPU_LIMIT` and `*_MEM_LIMIT` variables based on your server's capacity. Monitor usage with `docker stats` after starting.
+   - **Alerting**: Configure SMTP/Webhook settings if desired.
 
-2. Update the environment variables:
-   - Set `HOST_ADDRESS` to your server's domain or IP
-   - Configure email/webhook settings for alerts
-   - **Resource Limits**: Uncomment and adjust the `*_CPU_LIMIT` and `*_MEM_LIMIT` variables based on your server's capacity. Start with the defaults if unsure.
-   - Set strong passwords for `WAZUH_API_PASSWORD`
-
-3. Generate strong SSL certificates:
-   - **For production, use Let's Encrypt**:
+2. **Generate Production SSL Certificates**:
+   - **Use Let's Encrypt (Recommended)**:
      ```bash
      # Stop NGINX temporarily if running
-     sudo docker-compose stop nginx
+     sudo docker compose stop nginx
      
      # Install certbot
      sudo apt install -y certbot python3-certbot-nginx
      
-     # Generate certificates (use --nginx plugin if NGINX is already set up for the domain)
+     # Obtain certificate (use --nginx plugin if NGINX manages the domain)
      sudo certbot certonly --standalone -d your-domain.com --non-interactive --agree-tos -m your-email@example.com
      
-     # Copy certificates to the right location
+     # Copy certificates
      sudo cp /etc/letsencrypt/live/your-domain.com/fullchain.pem config/nginx/ssl/securiwatch.crt
      sudo cp /etc/letsencrypt/live/your-domain.com/privkey.pem config/nginx/ssl/securiwatch.key
      
-     # Set correct permissions
+     # Set permissions
      sudo chmod 600 config/nginx/ssl/securiwatch.key
+     # Nginx container runs as non-root, ensure it can read certs
+     sudo chown $(id -u):$(id -g) config/nginx/ssl/securiwatch.crt # Adjust if running install as root
+     sudo chown $(id -u):$(id -g) config/nginx/ssl/securiwatch.key # Adjust if running install as root
      ```
-   - Alternatively, use the included script for self-signed certs (not recommended for production):
-     ```bash
-     sudo ./generate-certs.sh
-     ```
+   - *Self-signed certs are generated by default via `generate-certs.sh` during setup, suitable for testing/internal use only.* 
 
-4. Generate strong credentials for the dashboard:
+3. **Set Strong Dashboard Credentials**:
    ```bash
-   # Replace 'admin' and 'your-secure-password' with your preferred credentials
+   # Replace 'admin' and 'your-secure-password'
    sudo echo "admin:$(openssl passwd -apr1 your-secure-password)" > config/nginx/.htpasswd
    sudo chmod 600 config/nginx/.htpasswd
    ```
 
-## Step 4: Start SecuriWatch
+## Step 3: Start/Restart SecuriWatch
 
-1. Apply configuration changes and start services:
-   ```bash
-   # Ensure you are in the installation directory
-   cd /opt/securiwatch 
-   
-   sudo docker-compose up -d
-   ```
+Apply configuration changes and start/restart services:
+```bash
+# Ensure you are in the installation directory
+cd $HOME/securiwatch # Or /opt/securiwatch
 
-2. Verify all services are running:
-   ```bash
-   sudo docker-compose ps
-   ```
+sudo docker compose down # Stop if running
+sudo docker compose up -d  # Start with new config
+```
 
-3. Test access to the dashboard:
-   - Open `https://your-domain.com` in a browser
+Verify services are running: `sudo docker compose ps`
+
+## Step 4: Access Dashboard
+
+Open `https://your-domain.com:PORT` or `https://your-server-ip:PORT` in your browser (using the `HTTPS_PORT` configured in `.env`, default 8443).
 
 ## Step 5: Secure Your Deployment
 
 1. **Configure Regular Backups**:
-   - The Elasticsearch data is stored in the `elasticsearch-data` volume.
-   - Configuration files are in the `/opt/securiwatch` directory.
-   - Set up a backup strategy for these volumes and files. Example using a script:
+   - Data is now stored in `./data` within your installation directory.
+   - Back up the entire installation directory (`$HOME/securiwatch` or `/opt/securiwatch`).
+   - **Important**: Stop containers writing to data directories before backup for consistency (Elasticsearch, Wazuh Manager, Filebeat).
    ```bash
+   # Example Backup Script (backup.sh)
    sudo nano backup.sh
    ```
-   
-   Content for backup.sh (adjust paths):
    ```bash
    #!/bin/bash
    BACKUP_DIR="/var/backups/securiwatch"
    DATE=$(date +%Y-%m-%d)
-   SOURCE_DIR="/opt/securiwatch"
+   SOURCE_DIR="$HOME/securiwatch" # Or /opt/securiwatch
+   COMPOSE_FILE="$SOURCE_DIR/docker-compose.yml"
    
-   # Create backup directory
-   mkdir -p "$BACKUP_DIR/$DATE"
+   echo "Starting SecuriWatch backup for $DATE..."
+   mkdir -p "$BACKUP_DIR"
    
-   # Backup configurations
-   rsync -a --delete "$SOURCE_DIR/config/" "$BACKUP_DIR/$DATE/config/"
-   rsync -a --delete "$SOURCE_DIR/.env" "$BACKUP_DIR/$DATE/.env"
+   echo "Stopping data-writing containers..."
+   # Use docker compose command found by setup.sh or detect here
+   DC_CMD="docker compose"
+   if ! command -v docker compose &> /dev/null; then DC_CMD="docker-compose"; fi
+   sudo $DC_CMD -f "$COMPOSE_FILE" stop elasticsearch wazuh-manager filebeat
    
-   # Backup Docker volumes
-   # Stop containers that write to volumes for consistency
-   docker-compose -f "$SOURCE_DIR/docker-compose.yml" stop elasticsearch wazuh-manager filebeat
+   echo "Performing backup using rsync..."
+   # Exclude logs or other non-essential files if needed
+   sudo rsync -a --delete --exclude='*.log' "$SOURCE_DIR/" "$BACKUP_DIR/$DATE/"
    
-   rsync -a --delete "/var/lib/docker/volumes/elasticsearch-data/_data/" "$BACKUP_DIR/$DATE/elasticsearch-data/"
-   rsync -a --delete "/var/lib/docker/volumes/wazuh-manager-config/_data/" "$BACKUP_DIR/$DATE/wazuh-manager-config/"
-   rsync -a --delete "/var/lib/docker/volumes/wazuh-manager-data/_data/" "$BACKUP_DIR/$DATE/wazuh-manager-data/"
-   rsync -a --delete "/var/lib/docker/volumes/filebeat-data/_data/" "$BACKUP_DIR/$DATE/filebeat-data/"
+   echo "Restarting containers..."
+   sudo $DC_CMD -f "$COMPOSE_FILE" start elasticsearch wazuh-manager filebeat
    
-   # Restart containers
-   docker-compose -f "$SOURCE_DIR/docker-compose.yml" start elasticsearch wazuh-manager filebeat
+   echo "Compressing backup..."
+   sudo tar -czf "$BACKUP_DIR/securiwatch-backup-$DATE.tar.gz" -C "$BACKUP_DIR" "$DATE"
    
-   # Compress backup
-   tar -czf "$BACKUP_DIR/securiwatch-backup-$DATE.tar.gz" -C "$BACKUP_DIR" "$DATE"
+   echo "Cleaning up old backups (keeping last 7)..."
+   sudo rm -rf "$BACKUP_DIR/$DATE" # Remove uncompressed dir
+   ls -t "$BACKUP_DIR"/securiwatch-backup-*.tar.gz | tail -n +8 | xargs -r sudo rm --
    
-   # Remove temp files
-   rm -rf "$BACKUP_DIR/$DATE"
-   
-   # Keep only last 7 backups
-   ls -t "$BACKUP_DIR"/securiwatch-backup-*.tar.gz | tail -n +8 | xargs -r rm
+   echo "Backup complete: $BACKUP_DIR/securiwatch-backup-$DATE.tar.gz"
    ```
+   - Schedule it via cron: `sudo chmod +x backup.sh && (crontab -l ; echo "0 2 * * * /path/to/backup.sh") | sudo crontab -`
 
-2. Make the backup script executable and schedule it:
-   ```bash
-   sudo chmod +x backup.sh
-   # Add to crontab for daily execution at 2 AM
-   (crontab -l ; echo "0 2 * * * /opt/securiwatch/backup.sh") | sudo crontab -
-   ```
-
-3. **Set up Log Rotation** for Docker container logs:
+2. **Set up Docker Log Rotation**:
+   - Configure the Docker daemon to rotate container logs.
    ```bash
    sudo nano /etc/docker/daemon.json
    ```
-   
-   Add or modify the following configuration:
    ```json
    {
      "log-driver": "json-file",
@@ -184,95 +147,35 @@ cd /opt/securiwatch
      }
    }
    ```
-   Restart Docker: `sudo systemctl restart docker`
+   - Restart Docker: `sudo systemctl restart docker`
 
-4. **Set up Health Monitoring**:
+3. **Set up Health Monitoring**:
    ```bash
-   # Make the health check script executable
-   sudo chmod +x scripts/healthcheck.sh
-   
-   # Add to crontab to run every 15 minutes
-   (crontab -l ; echo "*/15 * * * * cd /opt/securiwatch && ./scripts/healthcheck.sh > /opt/securiwatch/healthcheck.log 2>&1") | sudo crontab -
+   # Add to crontab
+   (crontab -l ; echo "*/15 * * * * cd $HOME/securiwatch && ./scripts/healthcheck.sh > healthcheck.log 2>&1") | crontab - 
+   # Note: Runs as the user adding the crontab entry
    ```
 
 ## Step 6: Additional Security Measures
 
-1. **Set up fail2ban** to protect against brute force attacks on the dashboard:
-   ```bash
-   sudo apt install -y fail2ban
-   
-   # Create a custom filter
-   sudo nano /etc/fail2ban/filter.d/securiwatch-auth.conf
-   ```
-   
-   Add the following content:
-   ```
-   [Definition]
-   failregex = ^<HOST> -.*"(GET|POST|PUT).*" 401
-   ignoreregex =
-   ```
-   
-   Configure the jail:
-   ```bash
-   sudo nano /etc/fail2ban/jail.d/securiwatch.conf
-   ```
-   
-   Add the following content:
-   ```
-   [securiwatch-auth]
-   enabled = true
-   port = http,https
-   filter = securiwatch-auth
-   logpath = /var/lib/docker/containers/*/*-json.log # Adjust if using a different log driver
-   maxretry = 5
-   bantime = 3600
-   ```
-   
-   Restart fail2ban:
-   ```bash
-   sudo systemctl restart fail2ban
-   ```
-   *Note: The `logpath` for fail2ban might need adjustment depending on your Docker logging setup.* 
-
-2. **Set up Server Monitoring** (optional):
-   - Consider using tools like Prometheus + Node Exporter + Grafana, or Datadog, Netdata, etc.
-   - Example setup for Node Exporter (see previous versions of this guide or official docs).
+- **fail2ban**: Protect the NGINX basic auth. Adjust `logpath` in `/etc/fail2ban/jail.d/securiwatch.conf` to point to Docker's json logs (often `/var/lib/docker/containers/*/*-json.log`).
+- **Server Monitoring**: Use tools like Prometheus/Grafana, Netdata, etc.
+- **Firewall**: Ensure only necessary ports (`HTTPS_PORT`, `HTTP_PORT`, SSH) are open to the intended networks.
 
 ## Troubleshooting
 
-### Service fails to start
+*(Commands assume installation in `$HOME/securiwatch`, adjust path if needed)*
 
-- Check logs: `sudo docker-compose logs [service_name]`
-- Verify environment variables in `.env` file
-- Ensure sufficient resources (RAM, CPU, disk) - check `sudo docker stats`
-- Check healthcheck status: `sudo docker-compose ps`
+- **Check Logs**: `cd $HOME/securiwatch && sudo docker compose logs [service_name]`
+- **Check Status**: `cd $HOME/securiwatch && sudo docker compose ps`
+- **Resources**: Check `sudo docker stats`
+- **Connectivity**: Verify firewall rules.
 
-### Cannot access dashboard
+## Updating
 
-- Check NGINX logs: `sudo docker-compose logs nginx`
-- Verify SSL certificates are correctly placed and have correct permissions
-- Check firewall rules: `sudo ufw status`
+```bash
+cd $HOME/securiwatch # Or /opt/securiwatch
+sudo ./update.sh
+```
 
-### Alerts not being processed
-
-- Check alerter logs: `sudo docker-compose logs alerter`
-- Verify SMTP or webhook configuration in `.env` and `alerter/config.yml`
-
-## Security Update Policy
-
-Regularly update your SecuriWatch installation:
-
-1. Navigate to the installation directory:
-   ```bash
-   cd /opt/securiwatch
-   ```
-
-2. Run the update script:
-   ```bash
-   sudo ./update.sh
-   ```
-
-3. Monitor security advisories for underlying components:
-   - Elasticsearch: https://www.elastic.co/security/
-   - Wazuh: https://wazuh.com/blog/
-   - NGINX: https://nginx.org/en/security_advisories.html 
+Monitor security advisories for components (Elasticsearch, Wazuh, NGINX). 
