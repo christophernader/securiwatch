@@ -17,11 +17,20 @@ services:
         hard: -1
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
+    # Expose port only if direct access is needed, otherwise remove for production
+    # ports:
+    #   - "9200:9200"
     networks:
       - securiwatch-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${ES_CPU_LIMIT:-2}'
+          memory: ${ES_MEM_LIMIT:-2g}
+        reservations:
+          cpus: '0.5'
+          memory: 1g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
       interval: 30s
@@ -35,8 +44,9 @@ services:
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "${KIBANA_PORT:-5601}:5601"
+    # Expose port only if direct access is needed, otherwise remove for production
+    # ports:
+    #   - "${KIBANA_PORT:-5601}:5601"
     volumes:
       - ./config/kibana:/usr/share/kibana/config/dashboards
     networks:
@@ -44,6 +54,14 @@ services:
     depends_on:
       - elasticsearch
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${KI_CPU_LIMIT:-1}'
+          memory: ${KI_MEM_LIMIT:-1g}
+        reservations:
+          cpus: '0.25'
+          memory: 512m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5601"]
       interval: 30s
@@ -69,6 +87,14 @@ services:
     depends_on:
       - elasticsearch
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${LS_CPU_LIMIT:-1}'
+          memory: ${LS_MEM_LIMIT:-1g}
+        reservations:
+          cpus: '0.25'
+          memory: 512m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9600"]
       interval: 30s
@@ -90,13 +116,22 @@ services:
     networks:
       - securiwatch-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${WZ_MGR_CPU_LIMIT:-1.5}'
+          memory: ${WZ_MGR_MEM_LIMIT:-1.5g}
+        reservations:
+          cpus: '0.5'
+          memory: 1g
 
   # Wazuh dashboard for monitoring
   wazuh-dashboard:
     image: wazuh/wazuh-dashboard:4.3.8
     container_name: wazuh-dashboard
-    ports:
-      - "${WAZUH_PORT:-8080}:443"
+    # Only NGINX needs to expose ports
+    # ports:
+    #   - "${WAZUH_PORT:-8080}:443"
     environment:
       - ELASTICSEARCH_URL=https://elasticsearch:9200
       - WAZUH_API_URL=https://wazuh-manager:55000
@@ -106,6 +141,14 @@ services:
       - elasticsearch
       - wazuh-manager
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${WZ_DB_CPU_LIMIT:-1}'
+          memory: ${WZ_DB_MEM_LIMIT:-1g}
+        reservations:
+          cpus: '0.25'
+          memory: 512m
 
   # NGINX for secure access to dashboards
   nginx:
@@ -121,9 +164,19 @@ services:
     networks:
       - securiwatch-network
     depends_on:
-      - wazuh-dashboard
-      - kibana
+      wazuh-dashboard:
+        condition: service_started
+      kibana:
+        condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${NGINX_CPU_LIMIT:-0.5}'
+          memory: ${NGINX_MEM_LIMIT:-256m}
+        reservations:
+          cpus: '0.1'
+          memory: 128m
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -134,8 +187,9 @@ services:
   alerter:
     build: ./alerter
     container_name: alerter
-    ports:
-      - "8081:8080"
+    # Port doesn't need to be exposed externally
+    # ports:
+    #   - "8081:8080"
     volumes:
       - ./alerter/config.yml:/app/config/config.yml
     environment:
@@ -148,9 +202,17 @@ services:
     networks:
       - securiwatch-network
     depends_on:
-      - elasticsearch
-      - logstash
+      logstash:
+        condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '${ALERTER_CPU_LIMIT:-0.25}'
+          memory: ${ALERTER_MEM_LIMIT:-128m}
+        reservations:
+          cpus: '0.05'
+          memory: 64m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -167,14 +229,23 @@ services:
       - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Needed for container metadata
       - filebeat-data:/usr/share/filebeat/data
     networks:
       - securiwatch-network
     depends_on:
-      - elasticsearch
-      - logstash
+      logstash:
+        condition: service_healthy
     restart: unless-stopped
     command: filebeat -e -strict.perms=false
+    deploy:
+      resources:
+        limits:
+          cpus: '${FB_CPU_LIMIT:-0.5}'
+          memory: ${FB_MEM_LIMIT:-256m}
+        reservations:
+          cpus: '0.1'
+          memory: 128m
 
 volumes:
   elasticsearch-data:
