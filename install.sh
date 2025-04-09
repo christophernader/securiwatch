@@ -36,11 +36,11 @@ if ! command -v curl &> /dev/null; then
     exit 1
 fi
 
-# Define installation directory in user's home
-INSTALL_DIR="$HOME/securiwatch"
+# Define installation directory explicitly
+# Use explicit path instead of $HOME to avoid potential env issues
+INSTALL_DIR="/home/chris/securiwatch" 
 
 echo "Current user: $(whoami)"
-echo "Home directory: $HOME"
 echo "Target install directory: $INSTALL_DIR"
 
 # Check if installation directory exists
@@ -79,6 +79,8 @@ echo -e "${GREEN}Creating directory: $INSTALL_DIR${NC}"
 mkdir -p "$INSTALL_DIR"
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Failed to create directory '$INSTALL_DIR'. Check parent directory permissions.${NC}"
+    # DEBUG: Show permissions of parent directory
+    ls -ld "$(dirname "$INSTALL_DIR")"
     exit 1
 fi
 
